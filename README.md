@@ -15,7 +15,7 @@ cidade (ex: `Arujá`, `Guarulhos`), o agente:
 
 > v0.1 prioriza **custo zero** para validar o conceito antes de investir em
 > fontes de dados pagas. Ver o PRD completo em
-> `../prds/PRD-prospector-agent.md` para o racional das decisões.
+> [`docs/PRD.md`](docs/PRD.md) para o racional das decisões.
 
 ## Arquitetura
 
@@ -99,6 +99,45 @@ npm run build-queue -- "barbearia" "Arujá"
 Ao final, os arquivos `data/fila_barbearia_aruja.csv` e `.json` terão a
 lista de leads ordenada por score, cada um com um link `wa.me` pronto pra
 clicar e abordar manualmente.
+
+## Automação diária
+
+O pipeline pode rodar sozinho todo dia via **Task Scheduler do Windows**, sem
+precisar de servidor externo — `collect.js` só grava leads novos (não reseta
+o status de leads já qualificados), então rodar todo dia é seguro e só
+consome quota da Gemini API para leads realmente novos.
+
+- **Script:** `scripts/run-daily.ps1` — roda `npm start` para cada combinação
+  de segmento/cidade definida na variável `$combos` dentro do script (edite
+  esse array para adicionar/remover cidades). Log de cada execução vai em
+  `logs/run-daily_<timestamp>.log` (ignorado no git).
+- **Tarefa registrada:** `ProspectorAgent-DailyRun`, diária às 6h.
+
+Comandos úteis (PowerShell):
+
+```powershell
+# ver detalhes/status da tarefa
+Get-ScheduledTask -TaskName "ProspectorAgent-DailyRun" | Format-List
+
+# rodar manualmente agora, pra testar
+Start-ScheduledTask -TaskName "ProspectorAgent-DailyRun"
+
+# desabilitar temporariamente (sem apagar)
+Disable-ScheduledTask -TaskName "ProspectorAgent-DailyRun"
+Enable-ScheduledTask -TaskName "ProspectorAgent-DailyRun"
+
+# remover de vez
+Unregister-ScheduledTask -TaskName "ProspectorAgent-DailyRun" -Confirm:$false
+```
+
+**Limitações da tarefa agendada (padrão do Windows):**
+
+- Modo "interativo apenas" — só executa se o usuário estiver logado no
+  Windows no horário (tela pode estar bloqueada, mas a sessão precisa
+  existir).
+- Por padrão, o Task Scheduler não inicia a tarefa se o notebook estiver na
+  bateria. Ajuste em `Set-ScheduledTask` ou pelas configurações de energia da
+  tarefa na GUI (`taskschd.msc`) se isso for um problema.
 
 ## Modelo de dados (tabela `leads`)
 

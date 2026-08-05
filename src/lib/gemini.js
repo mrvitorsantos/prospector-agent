@@ -5,11 +5,21 @@ function urlGemini(modelo) {
   return `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`;
 }
 
-function montarPrompt(lead) {
+function descreverLead(lead) {
+  return `- id: ${lead.id}
+  Nome: ${lead.nome}
+  Segmento: ${lead.segmento}
+  Cidade: ${lead.cidade}
+  Endereço: ${lead.endereco || 'não informado'}
+  Telefone: ${lead.telefone || 'não informado'}
+  Site: ${lead.site || 'não informado'}`;
+}
+
+function montarPromptLote(leads) {
   return `Você é um especialista em prospecção B2B para pequenas e médias empresas (PMEs) no Brasil.
 
-Analise o lead abaixo e responda SOMENTE com um JSON válido (sem markdown, sem texto antes ou depois), no formato exato:
-{"score": <número inteiro de 0 a 100>, "mensagem": "<mensagem de abordagem em português>"}
+Analise CADA lead abaixo e responda SOMENTE com um JSON array válido (sem markdown, sem texto antes ou depois), com exatamente um objeto por lead, na mesma ordem em que os leads foram listados, no formato exato:
+[{"id": "<id do lead>", "score": <número inteiro de 0 a 100>, "mensagem": "<mensagem de abordagem em português>"}, ...]
 
 Critérios de nota (score):
 - Ter telefone cadastrado facilita a abordagem: aumenta a nota.
@@ -17,19 +27,14 @@ Critérios de nota (score):
 - Nome e endereço completos e coerentes: aumenta a nota.
 - Falta de dados básicos (sem telefone, sem endereço): reduz a nota.
 
-A mensagem de abordagem deve:
+Cada mensagem de abordagem deve:
 - Ser curta (até 3 frases), natural e em português do Brasil.
 - Se apresentar brevemente e citar o nome do estabelecimento.
 - Ser adequada para envio manual via WhatsApp (não pode parecer spam em massa).
 - Apenas abrir uma conversa — não prometer nada que não foi pedido.
 
-Dados do lead:
-- Nome: ${lead.nome}
-- Segmento: ${lead.segmento}
-- Cidade: ${lead.cidade}
-- Endereço: ${lead.endereco || 'não informado'}
-- Telefone: ${lead.telefone || 'não informado'}
-- Site: ${lead.site || 'não informado'}`;
+Leads:
+${leads.map(descreverLead).join('\n')}`;
 }
 
 function extrairJsonDaResposta(texto) {
@@ -42,9 +47,10 @@ function extrairJsonDaResposta(texto) {
 }
 
 /**
- * Heurística de fallback usada quando a Gemini API falha, demora demais ou
- * não está configurada (sem GEMINI_API_KEY) — mantém o pipeline funcional
- * mesmo sem LLM disponível, com uma nota mais conservadora.
+ * Heurística de fallback usada quando a Gemini API falha, demora demais,
+ * não está configurada (sem GEMINI_API_KEY), ou quando o lead não tem
+ * telefone (sem wa_link, não é acionável via WhatsApp de qualquer forma —
+ * não vale a pena gastar quota da Gemini nele).
  */
 export function qualificarComHeuristica(lead) {
   let score = 40;
@@ -55,20 +61,22 @@ export function qualificarComHeuristica(lead) {
 
   const mensagem =
     `Olá! Vi o ${lead.nome} aqui em ${lead.cidade} e queria entender rapidinho ` +
-    'como vocês cuidam da parte de [assunto] hoje. Tem 2 minutos pra trocar uma ideia?';
+    'como está a rotina de atendimento e agendamento de vocês hoje. Tem 2 minutos pra trocar uma ideia?';
 
   return { score, mensagem, origem: 'heuristica' };
 }
 
 /**
- * Qualifica um lead usando a Gemini API (nota 0-100 + mensagem de
- * abordagem). Cai para a heurística de fallback (qualificarComHeuristica)
- * se `apiKey` não estiver definida ou se a chamada falhar por qualquer
- * motivo (rede, timeout, resposta fora do formato esperado, etc).
+ * Qualifica um lote de leads (score + mensagem, um resultado por lead) numa
+ * única chamada à Gemini API — reduz o número de requests consumidos da
+ * quota em comparação a uma chamada por lead. Cai para a heurística de
+ * fallback em TODO o lote se `apiKey` não estiver definida ou a chamada
+ * falhar/vier num formato inesperado (evita mapear resultado errado pro
+ * lead errado).
  */
-export async function qualificarComGemini(lead, apiKey) {
+export async function qualificarLoteComGemini(leads, apiKey) {
   if (!apiKey) {
-    return qualificarComHeuristica(lead);
+    return leads.map((lead) => ({ id: lead.id, ...qualificarComHeuristica(lead) }));
   }
 
   const controller = new AbortController();
@@ -80,7 +88,7 @@ export async function qualificarComGemini(lead, apiKey) {
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
       body: JSON.stringify({
-        contents: [{ parts: [{ text: montarPrompt(lead) }] }],
+        contents: [{ parts: [{ text: montarPromptLote(leads) }] }],
         generationConfig: { temperature: 0.4 },
       }),
     });
@@ -96,21 +104,41 @@ export async function qualificarComGemini(lead, apiKey) {
       throw new Error('Resposta da Gemini API sem conteúdo de texto (candidates[0].content.parts[0].text vazio).');
     }
 
-    const { score, mensagem } = extrairJsonDaResposta(texto);
-    if (typeof score !== 'number' || typeof mensagem !== 'string') {
-      throw new Error('JSON retornado pela Gemini API fora do formato esperado ({score, mensagem}).');
+    const itens = extrairJsonDaResposta(texto);
+    if (!Array.isArray(itens) || itens.length !== leads.length) {
+      throw new Error(
+        `JSON retornado pela Gemini API com formato inesperado (esperava array de ${leads.length} item(ns)).`
+      );
     }
 
-    return {
-      score: Math.max(0, Math.min(100, Math.round(score))),
-      mensagem,
-      origem: 'gemini',
-    };
+    const idsEsperados = new Set(leads.map((lead) => lead.id));
+    const idsVistos = new Set();
+
+    return itens.map((item) => {
+      if (
+        typeof item.id !== 'string' ||
+        !idsEsperados.has(item.id) ||
+        idsVistos.has(item.id) ||
+        typeof item.score !== 'number' ||
+        typeof item.mensagem !== 'string'
+      ) {
+        throw new Error(
+          'Item do JSON retornado pela Gemini API fora do formato esperado, com id fora do lote ou duplicado ({id, score, mensagem}).'
+        );
+      }
+      idsVistos.add(item.id);
+      return {
+        id: item.id,
+        score: Math.max(0, Math.min(100, Math.round(item.score))),
+        mensagem: item.mensagem,
+        origem: 'gemini',
+      };
+    });
   } catch (erro) {
     console.warn(
-      `[qualify] Falha ao qualificar "${lead.nome}" com Gemini (${erro.message}). Usando heurística de fallback.`
+      `[qualify] Falha ao qualificar lote de ${leads.length} lead(s) com Gemini (${erro.message}). Usando heurística de fallback para o lote.`
     );
-    return qualificarComHeuristica(lead);
+    return leads.map((lead) => ({ id: lead.id, ...qualificarComHeuristica(lead) }));
   } finally {
     clearTimeout(timeoutId);
   }
