@@ -1,0 +1,16 @@
+node_modules/
+
+# Banco de dados local e exports gerados — dados coletados, não fazem parte do código
+data/*.db
+data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+data/fila_*.csv
+data/fila_*.json
+
+.env
+.env.local
+*.log
+
+.DS_Store
+Thumbs.db

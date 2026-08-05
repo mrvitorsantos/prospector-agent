@@ -1,0 +1,19 @@
+{
+  "name": "prospector-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Agente de prospecção de PMEs por segmento e cidade — coleta leads via Overpass API (OpenStreetMap), qualifica com Gemini (nota 0-100 + mensagem de abordagem) e monta uma fila ordenada por score com link wa.me pronto para abordagem manual via WhatsApp.",
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "scripts": {
+    "collect": "node --env-file=.env src/collect.js",
+    "qualify": "node --env-file=.env src/qualify.js",
+    "build-queue": "node --env-file=.env src/buildQueue.js",
+    "start": "node --env-file=.env src/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0"
+  }
+}
