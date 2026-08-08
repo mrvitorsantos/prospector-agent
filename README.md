@@ -102,39 +102,58 @@ clicar e abordar manualmente.
 
 ## Automação diária
 
-O pipeline pode rodar sozinho todo dia via **Task Scheduler do Windows**, sem
-precisar de servidor externo — `collect.js` só grava leads novos (não reseta
-o status de leads já qualificados), então rodar todo dia é seguro e só
-consome quota da Gemini API para leads realmente novos.
+O pipeline roda sozinho via **Task Scheduler do Windows**, sem precisar de
+servidor externo — `collect.js` só grava leads novos (não reseta o status de
+leads já qualificados), então rodar todo dia é seguro e só consome quota da
+Gemini API para leads realmente novos.
 
-- **Script:** `scripts/run-daily.ps1` — roda `npm start` para cada combinação
-  de segmento/cidade definida na variável `$combos` dentro do script (edite
-  esse array para adicionar/remover cidades). Log de cada execução vai em
-  `logs/run-daily_<timestamp>.log` (ignorado no git).
-- **Tarefa registrada:** `ProspectorAgent-DailyRun`, diária às 6h.
+Em vez de uma tarefa só cobrindo várias cidades de uma vez, são **4 tarefas
+separadas, uma cidade cada, espaçadas ao longo do dia** — isso espalha o
+consumo de quota da Gemini em vez de concentrar tudo num único horário:
 
-Comandos úteis (PowerShell):
+| Tarefa | Horário | Cidade |
+|---|---|---|
+| `ProspectorAgent-06h-SantaIsabel` | 06:00 | Santa Isabel |
+| `ProspectorAgent-12h-Aruja` | 12:00 | Arujá |
+| `ProspectorAgent-18h-Guarulhos` | 18:00 | Guarulhos |
+| `ProspectorAgent-00h-Mogi` | 00:00 | Mogi das Cruzes |
+
+- **Script:** `scripts/run-one.ps1 -Segmento "barbearia" -Cidade "<cidade>"`
+  — roda `npm start` pra uma cidade, com retry simples (2 tentativas) em
+  falha. Log de cada execução vai em `logs/run_<cidade>_<timestamp>.log`
+  (ignorado no git).
+- As 4 cidades acima usam busca por **ID de área do OSM** (não por nome —
+  ver `RELATION_ID_POR_CIDADE` em `src/sources/overpass.js`), o que evita
+  ambiguidade com cidades homônimas em outros países (ver PRD seção 6,
+  o caso real que motivou isso: "Santa Isabel" também existe na Espanha).
+  Cidade fora dessa lista cai no casamento por nome, sujeito à mesma
+  ambiguidade.
+
+Comandos úteis (PowerShell) — troque `<nome-da-tarefa>` por uma da tabela:
 
 ```powershell
-# ver detalhes/status da tarefa
-Get-ScheduledTask -TaskName "ProspectorAgent-DailyRun" | Format-List
+# ver detalhes/status de uma tarefa
+Get-ScheduledTask -TaskName "<nome-da-tarefa>" | Format-List
 
 # rodar manualmente agora, pra testar
-Start-ScheduledTask -TaskName "ProspectorAgent-DailyRun"
+Start-ScheduledTask -TaskName "<nome-da-tarefa>"
 
 # desabilitar temporariamente (sem apagar)
-Disable-ScheduledTask -TaskName "ProspectorAgent-DailyRun"
-Enable-ScheduledTask -TaskName "ProspectorAgent-DailyRun"
+Disable-ScheduledTask -TaskName "<nome-da-tarefa>"
+Enable-ScheduledTask -TaskName "<nome-da-tarefa>"
 
 # remover de vez
-Unregister-ScheduledTask -TaskName "ProspectorAgent-DailyRun" -Confirm:$false
+Unregister-ScheduledTask -TaskName "<nome-da-tarefa>" -Confirm:$false
+
+# listar as 4 tarefas do Prospector de uma vez
+Get-ScheduledTask | Where-Object { $_.TaskName -like "ProspectorAgent-*" }
 ```
 
-**Limitações da tarefa agendada (padrão do Windows):**
+**Limitações das tarefas agendadas (padrão do Windows):**
 
-- Modo "interativo apenas" — só executa se o usuário estiver logado no
+- Modo "interativo apenas" — só executam se o usuário estiver logado no
   Windows no horário (tela pode estar bloqueada, mas a sessão precisa
-  existir).
+  existir). A tarefa das 00:00 é a mais sensível a isso.
 - Por padrão, o Task Scheduler não inicia a tarefa se o notebook estiver na
   bateria. Ajuste em `Set-ScheduledTask` ou pelas configurações de energia da
   tarefa na GUI (`taskschd.msc`) se isso for um problema.

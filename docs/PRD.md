@@ -45,12 +45,22 @@ chamada por lote, em vez de uma chamada por lead — reduz o número de requests
 consumidos da quota gratuita, que é o limite que mais estoura em uso diário
 (ver seção 6).
 
-**Automação diária (pós-v0.1).** `scripts/run-daily.ps1` + uma tarefa no
-Windows Task Scheduler (`ProspectorAgent-DailyRun`) rodam o pipeline completo
-todo dia às 6h pras combinações de segmento/cidade configuradas no script.
-`collect.js` só grava leads novos (não reseta status de leads já
-qualificados), então repetir a coleta diariamente é seguro e só consome quota
-da Gemini para leads realmente novos.
+**Automação diária (pós-v0.1).** `scripts/run-one.ps1` + 4 tarefas no Windows
+Task Scheduler (`ProspectorAgent-06h-SantaIsabel`, `-12h-Aruja`,
+`-18h-Guarulhos`, `-00h-Mogi`) rodam o pipeline completo uma cidade por vez,
+espaçadas ao longo do dia (06h/12h/18h/00h) — em vez de uma tarefa única
+cobrindo várias cidades de uma vez, o que concentraria o consumo de quota da
+Gemini num único horário. `collect.js` só grava leads novos (não reseta
+status de leads já qualificados), então repetir a coleta diariamente é
+seguro e só consome quota da Gemini para leads realmente novos.
+
+**Desambiguação de cidade por ID (pós-v0.1).** `overpass.js` busca a área
+das 4 cidades acima pelo ID de relação do OSM (`RELATION_ID_POR_CIDADE`,
+resolvido via Nominatim), não por nome — evita ambiguidade com cidades
+homônimas em outros países, e é mais barato pro Overpass processar que
+casamento por nome ou containment de área (ambos testados e descartados —
+ver seção 6). Cidade fora dessa lista cai no comportamento original por
+nome, sujeito à mesma ambiguidade.
 
 ## 3. Stack e por quê
 
@@ -106,9 +116,21 @@ da Gemini para leads realmente novos.
   seção 5, agravado pela automação diária.
 - Nome do modelo Gemini no `.env.example` pode estar desatualizado — confirme
   o nome vigente em https://ai.google.dev/gemini-api/docs/models antes de rodar.
-- A tarefa agendada (`ProspectorAgent-DailyRun`) só roda com o usuário logado
-  no Windows e, por padrão, não executa se o PC estiver na bateria — ver
-  README, seção "Automação diária".
+- As tarefas agendadas só rodam com o usuário logado no Windows e, por
+  padrão, não executam se o PC estiver na bateria — ver README, seção
+  "Automação diária".
+- **Ambiguidade de cidade homônima (caso real).** Buscar "Santa Isabel" sem
+  restrição de país/estado casou com uma cidade na Espanha (endereços em
+  espanhol, telefones `+34`), não com a Santa Isabel-SP pretendida — o
+  `wa_link` gerado por cima desse telefone também saiu quebrado (`phone.js`
+  assume DDI 55 sempre, ver seção 5). Resolvido pra `RELATION_ID_POR_CIDADE`
+  buscando por ID de relação do OSM em vez de nome (ver seção 2); duas
+  alternativas foram tentadas antes e descartadas por custo: (1) containment
+  área-em-área (`area[...](area.estado)`) — gerou 504 até em testes com
+  timeout aumentado, muito pesado pro Overpass público; (2) bbox no cabeçalho
+  da query — mais barato, mas retornou 0 resultados de forma pouco confiável
+  mesmo pra área correta. Cidade fora da lista mapeada continua exposta ao
+  mesmo risco.
 
 ## 7. Roadmap de evolução (quando fizer sentido financeiro)
 

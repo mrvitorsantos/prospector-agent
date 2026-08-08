@@ -23,6 +23,8 @@ export const SEGMENT_TAGS = {
   'petshop': ['shop=pet'],
   'restaurante': ['amenity=restaurant'],
   'lanchonete': ['amenity=fast_food'],
+  'pizzaria': ['cuisine=pizza'],
+  'pizzarias': ['cuisine=pizza'],
   'farmacia': ['amenity=pharmacy'],
   'mercado': ['shop=supermarket', 'shop=convenience'],
   'supermercado': ['shop=supermarket'],
