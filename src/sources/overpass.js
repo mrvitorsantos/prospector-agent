@@ -1,8 +1,10 @@
 import { resolverTagsOSM } from './segments.js';
 import { chaveComparacao } from '../lib/strings.js';
+import { aguardar } from '../lib/async.js';
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const TIMEOUT_QUERY_S = 25; // limite prático do servidor público do Overpass (ver PRD seção 6)
+const TIMEOUT_FETCH_MS = 30000; // margem sobre TIMEOUT_QUERY_S pra cobrir conexão que trava sem resposta
 
 // IDs de relação do OSM (resolvidos via Nominatim, admin_level 8 —
 // município) pras cidades do escopo de automação diária. Buscar a área por
@@ -34,15 +36,12 @@ function areaOSMPorRelationId(relationId) {
 const MAX_TENTATIVAS = 3;
 const ESPERA_ENTRE_TENTATIVAS_MS = 5000;
 
-function aguardar(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function erroTransitorio(erro) {
   // Sem `status` = falha de rede/timeout do fetch (não veio resposta HTTP).
-  // Com `status` = só 5xx é transitório; 4xx (query malformada, etc) não
-  // adianta tentar de novo.
-  return erro.status === undefined || (erro.status >= 500 && erro.status < 600);
+  // Com `status` = 5xx é transitório, assim como 429 (rate-limit do Overpass
+  // sob uso automatizado — o caso mais provável com as tarefas diárias); o
+  // resto dos 4xx (query malformada, etc) não adianta tentar de novo.
+  return erro.status === undefined || erro.status === 429 || (erro.status >= 500 && erro.status < 600);
 }
 
 function montarFiltrosTag(tags) {
@@ -134,6 +133,11 @@ export async function buscarLeads(segmento, cidade) {
           'User-Agent': 'prospector-agent/0.1',
         },
         body: query,
+        // [timeout:${TIMEOUT_QUERY_S}] na query só limita a execução no
+        // servidor — não fecha a conexão se o servidor aceitar e nunca
+        // responder. Sem isso, uma tentativa pode travar indefinidamente
+        // numa execução agendada.
+        signal: AbortSignal.timeout(TIMEOUT_FETCH_MS),
       });
 
       if (!resposta.ok) {

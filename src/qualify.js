@@ -2,6 +2,7 @@ import { getLeadsPorStatus, atualizarQualificacao } from './db.js';
 import { qualificarComHeuristica, qualificarLoteComGemini } from './lib/gemini.js';
 import { normalizarCampo } from './lib/strings.js';
 import { isMain } from './lib/cli.js';
+import { aguardar } from './lib/async.js';
 
 // Quantos leads vão em cada chamada à Gemini API — reduz o número de
 // requests consumidos da quota (o que mais estoura na tier gratuita) sem
@@ -13,10 +14,6 @@ const TAMANHO_LOTE = Number.isInteger(TAMANHO_LOTE_ENV) && TAMANHO_LOTE_ENV > 0 
 
 // Atraso entre lotes pra não estourar o rate-limit por minuto da Gemini API.
 const ATRASO_ENTRE_LOTES_MS = 1200;
-
-function aguardar(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function emLotes(itens, tamanho) {
   const lotes = [];
