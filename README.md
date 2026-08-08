@@ -52,7 +52,8 @@ src/
   index.js             # orquestra as 3 etapas em sequência (CLI)
   sources/
     overpass.js        # cliente Overpass API — buscarLeads(segmento, cidade)
-    segments.js         # dicionário segmento -> tag(s) OSM
+    googlePlaces.js      # cliente Google Places API (New) — mesma interface
+    segments.js         # dicionário segmento -> tag(s) OSM (só usado pelo Overpass)
   lib/
     gemini.js           # cliente Gemini API + heurística de fallback
     phone.js             # normalização de telefone -> link wa.me
@@ -79,6 +80,25 @@ cp .env.example .env
 # confira também se GEMINI_MODEL ainda é o nome vigente em:
 # https://ai.google.dev/gemini-api/docs/models
 ```
+
+## Fonte de dados
+
+`src/collect.js` escolhe a fonte via `LEAD_SOURCE` no `.env`:
+
+| `LEAD_SOURCE` | Fonte | Custo | Cobertura de telefone |
+|---|---|---|---|
+| `overpass` (padrão) | Overpass API (OpenStreetMap) | Grátis, sem chave | Inconsistente, principalmente em cidades pequenas — ver [Limitações conhecidas](#limitações-conhecidas-v01) |
+| `google_places` | Google Places API (New) — Text Search | Cota gratuita mensal, depois faturado (~$32/1.000 chamadas na tier "Pro" — ver PRD seção 7) | Bem mais completa |
+
+Pra usar `google_places`:
+
+1. Crie um projeto no [Google Cloud Console](https://console.cloud.google.com/), habilite billing (obrigatório mesmo pra usar só a cota gratuita) e habilite a **Places API (New)**.
+2. Gere uma chave em [console.cloud.google.com/google/maps-apis/credentials](https://console.cloud.google.com/google/maps-apis/credentials) e coloque em `GOOGLE_PLACES_API_KEY` no `.env`.
+3. Mude `LEAD_SOURCE=overpass` para `LEAD_SOURCE=google_places` no `.env`.
+
+Interface de `buscarLeads(segmento, cidade)` é a mesma nas duas fontes — trocar `LEAD_SOURCE` não muda nada em `qualify.js`, `buildQueue.js` nem no schema do SQLite. IDs de lead do Google Places são prefixados com `gplaces/` (o Overpass usa `node/`/`way/`) pra não colidir caso o mesmo banco já tenha leads das duas fontes.
+
+`src/sources/segments.js` (dicionário segmento → tag OSM) só é usado pelo Overpass — o Google Places busca por texto livre (`"<segmento> em <cidade>"`), sem precisar de mapeamento.
 
 ## Como rodar
 

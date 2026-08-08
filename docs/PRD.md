@@ -136,7 +136,7 @@ nome, sujeito à mesma ambiguidade.
 
 | Gatilho (threshold mensurável) | Mudança sugerida |
 |---|---|
-| ≥1 cliente fechado pagando pelo serviço, OU ≥30 leads qualificados/semana com taxa de resposta ≥15% no manual atual | Trocar `overpass.js` pela Google Places API (New) — cobertura de telefone bem melhor, custo ~$32/1.000 chamadas na tier Pro após cota gratuita de 5.000/mês |
+| ~~≥1 cliente fechado pagando pelo serviço, OU ≥30 leads qualificados/semana com taxa de resposta ≥15% no manual atual~~ | ~~Trocar `overpass.js` pela Google Places API (New)~~ — **implementado como opt-in**: `src/sources/googlePlaces.js`, ativado via `LEAD_SOURCE=google_places` no `.env` (padrão continua `overpass`). Custo ~$32/1.000 chamadas na tier Pro após cota gratuita de 5.000/mês — ver README seção "Fonte de dados". Ainda vale usar o gatilho original pra decidir *quando* migrar a automação diária de fato pra essa fonte. |
 | Precisar acessar a fila de outro dispositivo além do PC local, ou 2+ pessoas usando/atualizando a mesma fila | Migrar SQLite → Supabase (Postgres gerenciado), mantendo o mesmo schema de `leads` |
 | ≥50 mensagens manuais/semana enviadas de forma consistente por 4 semanas seguidas (volume que já dói fazer à mão) | Avaliar WhatsApp Business API oficial (paga, mas sem risco de ban) |
 | Decisões de fluxo (retry por segmento, priorização dinâmica, lidar com falha parcial) não couberem mais em código imperativo simples | Reescrever a orquestração (`index.js`) usando LangGraph, aproveitando o que você já está estudando na trilha da Alura |
