@@ -8,9 +8,14 @@ export function semAcentos(texto) {
   return texto.normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
-/** Chave de comparação: sem acentos, minúscula, sem espaços nas pontas. */
+/**
+ * Chave de comparação: sem acentos, minúscula, sem espaços nas pontas e sem
+ * espaços internos duplicados (ex: "Mogi  das Cruzes" -> "mogi das cruzes")
+ * — evita que um espaçamento irregular perca o match em CIDADES
+ * (src/lib/cidades.js) e caia silenciosamente sem desambiguação de homônimo.
+ */
 export function chaveComparacao(texto) {
-  return semAcentos(texto).toLowerCase().trim();
+  return semAcentos(texto).toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
 /**

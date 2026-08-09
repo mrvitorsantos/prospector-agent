@@ -123,20 +123,33 @@ nome, sujeito à mesma ambiguidade.
   restrição de país/estado casou com uma cidade na Espanha (endereços em
   espanhol, telefones `+34`), não com a Santa Isabel-SP pretendida — o
   `wa_link` gerado por cima desse telefone também saiu quebrado (`phone.js`
-  assume DDI 55 sempre, ver seção 5). Resolvido pra `RELATION_ID_POR_CIDADE`
-  buscando por ID de relação do OSM em vez de nome (ver seção 2); duas
-  alternativas foram tentadas antes e descartadas por custo: (1) containment
-  área-em-área (`area[...](area.estado)`) — gerou 504 até em testes com
-  timeout aumentado, muito pesado pro Overpass público; (2) bbox no cabeçalho
-  da query — mais barato, mas retornou 0 resultados de forma pouco confiável
+  assume DDI 55 sempre, ver seção 5). Resolvido para as cidades em `CIDADES`
+  (`src/lib/cidades.js`, fonte única usada pelas duas fontes de dados):
+  Overpass busca por ID de relação do OSM em vez de nome (ver seção 2);
+  Google Places restringe por `locationRestriction` (retângulo/bounding box
+  calculado a partir do centro+raio — a Places API só aceita `rectangle`
+  nesse campo, não `circle`; `locationBias` é que aceita círculo, mas é só
+  preferência de ranking e não bloqueia resultado fora da área). Duas
+  alternativas de Overpass foram
+  tentadas antes e descartadas por custo: (1) containment área-em-área
+  (`area[...](area.estado)`) — gerou 504 até em testes com timeout
+  aumentado, muito pesado pro Overpass público; (2) bbox no cabeçalho da
+  query — mais barato, mas retornou 0 resultados de forma pouco confiável
   mesmo pra área correta. Cidade fora da lista mapeada continua exposta ao
-  mesmo risco.
+  mesmo risco, em qualquer uma das duas fontes.
+- **As duas fontes de dados não deduplicam entre si.** Um lead do Overpass
+  (`node/123`) e o mesmo estabelecimento coletado depois via Google Places
+  (`gplaces/ChIJ...`) são registros distintos no SQLite (`ON CONFLICT(id)`
+  só dedupe dentro do esquema de ID de uma fonte) — trocar `LEAD_SOURCE`
+  entre execuções pro mesmo segmento+cidade pode duplicar o estabelecimento
+  na fila final. Sem solução implementada ainda (exigiria matching por
+  nome/telefone/endereço, com decisão de threshold de similaridade).
 
 ## 7. Roadmap de evolução (quando fizer sentido financeiro)
 
 | Gatilho (threshold mensurável) | Mudança sugerida |
 |---|---|
-| ~~≥1 cliente fechado pagando pelo serviço, OU ≥30 leads qualificados/semana com taxa de resposta ≥15% no manual atual~~ | ~~Trocar `overpass.js` pela Google Places API (New)~~ — **implementado como opt-in**: `src/sources/googlePlaces.js`, ativado via `LEAD_SOURCE=google_places` no `.env` (padrão continua `overpass`). Custo ~$32/1.000 chamadas na tier Pro após cota gratuita de 5.000/mês — ver README seção "Fonte de dados". Ainda vale usar o gatilho original pra decidir *quando* migrar a automação diária de fato pra essa fonte. |
+| ~~≥1 cliente fechado pagando pelo serviço, OU ≥30 leads qualificados/semana com taxa de resposta ≥15% no manual atual~~ | ~~Trocar `overpass.js` pela Google Places API (New)~~ — **implementado como opt-in**: `src/sources/googlePlaces.js`, ativado via `LEAD_SOURCE=google_places` no `.env` (padrão continua `overpass`). Faturado no SKU "Enterprise" (telefone/site são "Contact Data") após cota gratuita de 5.000/mês — ver README seção "Fonte de dados" pro preço atualizado. Ainda vale usar o gatilho original pra decidir *quando* migrar a automação diária de fato pra essa fonte. |
 | Precisar acessar a fila de outro dispositivo além do PC local, ou 2+ pessoas usando/atualizando a mesma fila | Migrar SQLite → Supabase (Postgres gerenciado), mantendo o mesmo schema de `leads` |
 | ≥50 mensagens manuais/semana enviadas de forma consistente por 4 semanas seguidas (volume que já dói fazer à mão) | Avaliar WhatsApp Business API oficial (paga, mas sem risco de ban) |
 | Decisões de fluxo (retry por segmento, priorização dinâmica, lidar com falha parcial) não couberem mais em código imperativo simples | Reescrever a orquestração (`index.js`) usando LangGraph, aproveitando o que você já está estudando na trilha da Alura |

@@ -88,7 +88,7 @@ cp .env.example .env
 | `LEAD_SOURCE` | Fonte | Custo | Cobertura de telefone |
 |---|---|---|---|
 | `overpass` (padrão) | Overpass API (OpenStreetMap) | Grátis, sem chave | Inconsistente, principalmente em cidades pequenas — ver [Limitações conhecidas](#limitações-conhecidas-v01) |
-| `google_places` | Google Places API (New) — Text Search | Cota gratuita mensal, depois faturado (~$32/1.000 chamadas na tier "Pro" — ver PRD seção 7) | Bem mais completa |
+| `google_places` | Google Places API (New) — Text Search | Cota gratuita mensal, depois faturado — SKU "Enterprise" (telefone/site são "Contact Data", mais caro que o "Pro"; ver preço atualizado em [mapsplatform.google.com/pricing](https://mapsplatform.google.com/pricing/), não fixamos número aqui pois muda com frequência) | Bem mais completa |
 
 Pra usar `google_places`:
 
@@ -120,16 +120,22 @@ Ao final, os arquivos `data/fila_barbearia_aruja.csv` e `.json` terão a
 lista de leads ordenada por score, cada um com um link `wa.me` pronto pra
 clicar e abordar manualmente.
 
-## Automação diária
+## Automação (dia sim, dia não)
 
 O pipeline roda sozinho via **Task Scheduler do Windows**, sem precisar de
 servidor externo — `collect.js` só grava leads novos (não reseta o status de
-leads já qualificados), então rodar todo dia é seguro e só consome quota da
-Gemini API para leads realmente novos.
+leads já qualificados), então repetir a execução é seguro e só consome quota
+das APIs pra leads realmente novos.
+
+As 4 tarefas rodam em **dias alternados** (`DaysInterval=2` no trigger),
+não todo dia — isso reduz pela metade o consumo mensal de cota tanto da
+Gemini quanto da Google Places API (ver seção "Fonte de dados"), mantendo
+um fluxo constante de leads novos sem esgotar a cota gratuita de nenhuma
+das duas.
 
 Em vez de uma tarefa só cobrindo várias cidades de uma vez, são **4 tarefas
 separadas, uma cidade cada, espaçadas ao longo do dia** — isso espalha o
-consumo de quota da Gemini em vez de concentrar tudo num único horário:
+consumo de quota em vez de concentrar tudo num único horário:
 
 | Tarefa | Horário | Cidade |
 |---|---|---|
@@ -138,16 +144,36 @@ consumo de quota da Gemini em vez de concentrar tudo num único horário:
 | `ProspectorAgent-18h-Guarulhos` | 18:00 | Guarulhos |
 | `ProspectorAgent-00h-Mogi` | 00:00 | Mogi das Cruzes |
 
+São Paulo (capital) está **fora do escopo da automação** de propósito —
+é uma cidade grande demais pra uma amostra de 20 resultados por chamada
+(ver `MAX_PAGINAS` em `src/sources/googlePlaces.js`) representar bem a
+cobertura real, e giraria a cota bem mais rápido que as cidades menores
+acima.
+
 - **Script:** `scripts/run-one.ps1 -Segmento "barbearia" -Cidade "<cidade>"`
   — roda `npm start` pra uma cidade, com retry simples (2 tentativas) em
   falha. Log de cada execução vai em `logs/run_<cidade>_<timestamp>.log`
   (ignorado no git).
-- As 4 cidades acima usam busca por **ID de área do OSM** (não por nome —
-  ver `RELATION_ID_POR_CIDADE` em `src/sources/overpass.js`), o que evita
-  ambiguidade com cidades homônimas em outros países (ver PRD seção 6,
-  o caso real que motivou isso: "Santa Isabel" também existe na Espanha).
-  Cidade fora dessa lista cai no casamento por nome, sujeito à mesma
-  ambiguidade.
+- As 4 cidades acima têm proteção contra ambiguidade de cidade homônima em
+  outros países (ver PRD seção 6, o caso real que motivou isso: "Santa
+  Isabel" também existe na Espanha), definida uma vez em `CIDADES`
+  (`src/lib/cidades.js`) e usada pelas duas fontes:
+  - `LEAD_SOURCE=overpass` busca a área pelo **ID de relação do OSM** (não
+    por nome).
+  - `LEAD_SOURCE=google_places` restringe a busca com **`locationRestriction`**
+    (retângulo/bounding box calculado a partir do centro+raio de `CIDADES`
+    — a Places API só aceita `rectangle` em `locationRestriction`, não
+    `circle`) — diferente de `locationBias`, que é só preferência de
+    ranking e não bloqueia resultado fora da área, `locationRestriction`
+    exclui de fato.
+
+  Cidade fora de `CIDADES` cai no comportamento sem proteção de cada fonte
+  (casamento por nome no Overpass, texto livre no Google Places), sujeita à
+  mesma ambiguidade.
+  **Atenção:** as duas fontes não deduplicam entre si — trocar `LEAD_SOURCE`
+  entre execuções pro mesmo segmento+cidade pode gravar o mesmo
+  estabelecimento duas vezes na fila (um lead `node/`/`way/` do Overpass e
+  outro `gplaces/...` do Google Places).
 
 Comandos úteis (PowerShell) — troque `<nome-da-tarefa>` por uma da tabela:
 

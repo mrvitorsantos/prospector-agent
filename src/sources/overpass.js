@@ -1,47 +1,24 @@
 import { resolverTagsOSM } from './segments.js';
 import { chaveComparacao } from '../lib/strings.js';
-import { aguardar } from '../lib/async.js';
+import { fetchComRetry } from '../lib/httpRetry.js';
+import { CIDADES } from '../lib/cidades.js';
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const TIMEOUT_QUERY_S = 25; // limite prático do servidor público do Overpass (ver PRD seção 6)
 const TIMEOUT_FETCH_MS = 30000; // margem sobre TIMEOUT_QUERY_S pra cobrir conexão que trava sem resposta
 
-// IDs de relação do OSM (resolvidos via Nominatim, admin_level 8 —
-// município) pras cidades do escopo de automação diária. Buscar a área por
-// ID em vez de por nome elimina qualquer ambiguidade com cidades homônimas
-// em outros países/estados — foi o que aconteceu com "Santa Isabel", que
-// também existe na Espanha, e o Overpass casou com a errada. É também a
-// consulta mais barata que existe pro Overpass processar (sem casamento de
-// nome nem containment de área — chegou a gerar 504 nas duas tentativas).
-// Cidades fora desta lista caem no fallback por nome (ver montarQuery),
-// sujeito à mesma ambiguidade da v0.1 original (ver PRD seção 6) — adicione
-// uma entrada aqui (chave sem acento, minúscula) quando precisar de uma
-// cidade nova de forma confiável.
-const RELATION_ID_POR_CIDADE = {
-  aruja: 297934,
-  guarulhos: 298165,
-  'mogi das cruzes': 298415,
-  'santa isabel': 298250,
-};
-
+// Buscar a área da cidade por ID de relação do OSM (ver CIDADES em
+// ../lib/cidades.js) em vez de por nome elimina qualquer ambiguidade com
+// cidades homônimas em outros países/estados — foi o que aconteceu com
+// "Santa Isabel", que também existe na Espanha, e o Overpass casou com a
+// errada. É também a consulta mais barata que existe pro Overpass processar
+// (sem casamento de nome nem containment de área — chegou a gerar 504 nas
+// duas tentativas). Cidade fora de CIDADES cai no fallback por nome (ver
+// montarQuery), sujeito à mesma ambiguidade da v0.1 original (ver PRD seção 6).
 function areaOSMPorRelationId(relationId) {
   // Convenção do Overpass: id de área de uma relação = 3.6 bilhões + id da
   // relação (ver https://wiki.openstreetmap.org/wiki/Overpass_API/Areas).
   return 3600000000 + relationId;
-}
-
-// A instância pública do Overpass ocasionalmente responde 5xx (sobrecarga)
-// ou falha de rede sob uso automatizado — poucas tentativas com espera curta
-// resolvem a maioria dos casos sem precisar de intervenção manual.
-const MAX_TENTATIVAS = 3;
-const ESPERA_ENTRE_TENTATIVAS_MS = 5000;
-
-function erroTransitorio(erro) {
-  // Sem `status` = falha de rede/timeout do fetch (não veio resposta HTTP).
-  // Com `status` = 5xx é transitório, assim como 429 (rate-limit do Overpass
-  // sob uso automatizado — o caso mais provável com as tarefas diárias); o
-  // resto dos 4xx (query malformada, etc) não adianta tentar de novo.
-  return erro.status === undefined || erro.status === 429 || (erro.status >= 500 && erro.status < 600);
 }
 
 function montarFiltrosTag(tags) {
@@ -62,7 +39,7 @@ function montarQuery(segmento, cidade) {
     );
   }
 
-  const relationId = RELATION_ID_POR_CIDADE[chaveComparacao(cidade)];
+  const relationId = CIDADES[chaveComparacao(cidade)]?.relationId;
 
   // Cidade mapeada: busca a área direto pelo ID da relação (sem ambiguidade,
   // sem casamento de nome). Cidade fora do mapa: cai no comportamento
@@ -115,62 +92,43 @@ function montarEndereco(tags = {}) {
  * rede) são tentados de novo automaticamente antes de desistir.
  *
  * Ambiguidade de nome (ex: cidades homônimas em outros países): resolvida
- * para as cidades em RELATION_ID_POR_CIDADE via busca por ID; qualquer outra
- * cidade cai no casamento por nome exato, ainda sujeito ao problema.
+ * para as cidades em CIDADES (../lib/cidades.js) via busca por ID; qualquer
+ * outra cidade cai no casamento por nome exato, ainda sujeito ao problema.
  */
 export async function buscarLeads(segmento, cidade) {
   const query = montarQuery(segmento, cidade);
 
-  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
-    try {
-      const resposta = await fetch(OVERPASS_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain',
-          // O Apache do Overpass responde 406 a requisições sem esses headers
-          // (o fetch nativo do Node não os envia por padrão).
-          Accept: '*/*',
-          'User-Agent': 'prospector-agent/0.1',
-        },
-        body: query,
-        // [timeout:${TIMEOUT_QUERY_S}] na query só limita a execução no
-        // servidor — não fecha a conexão se o servidor aceitar e nunca
-        // responder. Sem isso, uma tentativa pode travar indefinidamente
-        // numa execução agendada.
-        signal: AbortSignal.timeout(TIMEOUT_FETCH_MS),
-      });
+  const resposta = await fetchComRetry(
+    OVERPASS_URL,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+        // O Apache do Overpass responde 406 a requisições sem esses headers
+        // (o fetch nativo do Node não os envia por padrão).
+        Accept: '*/*',
+        'User-Agent': 'prospector-agent/0.1',
+      },
+      body: query,
+      // [timeout:${TIMEOUT_QUERY_S}] na query só limita a execução no
+      // servidor — não fecha a conexão se o servidor aceitar e nunca
+      // responder. Sem isso, uma tentativa pode travar indefinidamente
+      // numa execução agendada.
+      signal: AbortSignal.timeout(TIMEOUT_FETCH_MS),
+    },
+    { apiLabel: 'Overpass API', logTag: '[overpass]' }
+  );
 
-      if (!resposta.ok) {
-        const corpo = await resposta.text().catch(() => '');
-        const erro = new Error(`Overpass API respondeu ${resposta.status}: ${corpo.slice(0, 300)}`);
-        erro.status = resposta.status;
-        throw erro;
-      }
+  const dados = await resposta.json();
+  const elementos = dados?.elements || [];
 
-      const dados = await resposta.json();
-      const elementos = dados.elements || [];
-
-      return elementos
-        .filter((elemento) => elemento.tags?.name) // ignora elementos sem nome (pouco úteis pra prospecção)
-        .map((elemento) => ({
-          id: `${elemento.type}/${elemento.id}`,
-          nome: elemento.tags.name,
-          endereco: montarEndereco(elemento.tags),
-          telefone: extrairTelefone(elemento.tags),
-          site: extrairSite(elemento.tags),
-        }));
-    } catch (erro) {
-      const ultimaTentativa = tentativa === MAX_TENTATIVAS;
-      if (!erroTransitorio(erro) || ultimaTentativa) {
-        throw erro;
-      }
-      console.warn(
-        `[overpass] Tentativa ${tentativa}/${MAX_TENTATIVAS} falhou (${erro.message}). Tentando de novo em ${ESPERA_ENTRE_TENTATIVAS_MS}ms...`
-      );
-      await aguardar(ESPERA_ENTRE_TENTATIVAS_MS);
-    }
-  }
-
-  // Inatingível: o loop sempre retorna ou lança na última tentativa.
-  throw new Error('[overpass] Falha inesperada após esgotar as tentativas.');
+  return elementos
+    .filter((elemento) => elemento.tags?.name) // ignora elementos sem nome (pouco úteis pra prospecção)
+    .map((elemento) => ({
+      id: `${elemento.type}/${elemento.id}`,
+      nome: elemento.tags.name,
+      endereco: montarEndereco(elemento.tags),
+      telefone: extrairTelefone(elemento.tags),
+      site: extrairSite(elemento.tags),
+    }));
 }

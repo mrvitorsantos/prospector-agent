@@ -1,12 +1,16 @@
-import { aguardar } from '../lib/async.js';
+import { chaveComparacao } from '../lib/strings.js';
+import { fetchComRetry } from '../lib/httpRetry.js';
+import { CIDADES } from '../lib/cidades.js';
 
 const PLACES_URL = 'https://places.googleapis.com/v1/places:searchText';
 const TIMEOUT_FETCH_MS = 30000;
 
-// Campos "Pro" (telefone/site) — é o que determina o custo por chamada
-// (ver PRD seção 7: ~$32/1.000 chamadas após a cota gratuita mensal).
-// Pedir só o necessário mantém o custo no SKU mais barato disponível pra
-// esse dado.
+// nationalPhoneNumber e websiteUri são "Contact Data" — caem no SKU
+// "Enterprise" da Places API (New), mais caro que o "Pro" (ver preços
+// atualizados em https://mapsplatform.google.com/pricing/, não fixar um
+// número aqui pois muda com frequência — ver PRD seção 7). Pedir só os
+// campos necessários evita subir pro SKU "Enterprise + Atmosphere" (que
+// adiciona rating/reviews, sem uso aqui).
 const FIELD_MASK = [
   'places.id',
   'places.displayName',
@@ -15,57 +19,58 @@ const FIELD_MASK = [
   'places.websiteUri',
 ].join(',');
 
-// Cada página custa uma chamada faturável — 1 página (até 20 resultados) é
-// suficiente pro volume de PME por segmento/cidade da v0.1 e mantém o
-// consumo de cota previsível. Ajuste se precisar de mais cobertura por
-// cidade grande.
 const MAX_PAGINAS = 1;
 
-// A API ocasionalmente responde 429 (rate-limit) ou 5xx sob uso automatizado
-// — mesma estratégia de retry usada em src/sources/overpass.js.
-const MAX_TENTATIVAS = 3;
-const ESPERA_ENTRE_TENTATIVAS_MS = 5000;
+// Metros por grau de latitude (~constante); metros por grau de longitude
+// varia com a latitude (encolhe perto dos polos) — daí dividir por cos(lat).
+const METROS_POR_GRAU_LATITUDE = 111320;
 
-function erroTransitorio(erro) {
-  return erro.status === undefined || erro.status === 429 || (erro.status >= 500 && erro.status < 600);
+// `SearchTextRequest.LocationRestriction` só aceita `rectangle` (não
+// `circle`, que é exclusivo de `locationBias` — a Places API rejeita com
+// 400 "Unknown name 'circle' at 'location_restriction'" se tentar). Convertemos
+// o centro+raio de CIDADES (../lib/cidades.js, compartilhado com o
+// Overpass) num bounding box aproximado em graus.
+function locationRestrictionPara(cidade) {
+  const centro = CIDADES[chaveComparacao(cidade)];
+  if (!centro) return undefined;
+
+  const deltaLat = centro.raioMetros / METROS_POR_GRAU_LATITUDE;
+  const deltaLon =
+    centro.raioMetros / (METROS_POR_GRAU_LATITUDE * Math.cos((centro.lat * Math.PI) / 180));
+
+  // `locationRestriction` (diferente de `locationBias`, que é só preferência
+  // de ranking) exclui de fato resultado fora do retângulo — é o que
+  // garante a desambiguação de cidade homônima. Cidade fora desse mapa cai
+  // no texto livre, sujeita à mesma ambiguidade que o Overpass tem pra
+  // cidade não mapeada em CIDADES.
+  return {
+    rectangle: {
+      low: { latitude: centro.lat - deltaLat, longitude: centro.lon - deltaLon },
+      high: { latitude: centro.lat + deltaLat, longitude: centro.lon + deltaLon },
+    },
+  };
 }
 
-async function buscarPagina(query, apiKey, pageToken) {
-  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
-    try {
-      const resposta = await fetch(PLACES_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': apiKey,
-          'X-Goog-FieldMask': `${FIELD_MASK},nextPageToken`,
-        },
-        body: JSON.stringify({ textQuery: query, pageToken }),
-        signal: AbortSignal.timeout(TIMEOUT_FETCH_MS),
-      });
+async function buscarPagina(query, apiKey, pageToken, locationRestriction) {
+  const resposta = await fetchComRetry(
+    PLACES_URL,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': `${FIELD_MASK},nextPageToken`,
+      },
+      // regionCode "BR" é só um viés geral (todo o app é focado em PMEs no
+      // Brasil); locationRestriction é a desambiguação forte pras cidades
+      // mapeadas em CIDADES.
+      body: JSON.stringify({ textQuery: query, pageToken, regionCode: 'BR', locationRestriction }),
+      signal: AbortSignal.timeout(TIMEOUT_FETCH_MS),
+    },
+    { apiLabel: 'Google Places API', logTag: '[googlePlaces]' }
+  );
 
-      if (!resposta.ok) {
-        const corpo = await resposta.text().catch(() => '');
-        const erro = new Error(`Google Places API respondeu ${resposta.status}: ${corpo.slice(0, 300)}`);
-        erro.status = resposta.status;
-        throw erro;
-      }
-
-      return await resposta.json();
-    } catch (erro) {
-      const ultimaTentativa = tentativa === MAX_TENTATIVAS;
-      if (!erroTransitorio(erro) || ultimaTentativa) {
-        throw erro;
-      }
-      console.warn(
-        `[googlePlaces] Tentativa ${tentativa}/${MAX_TENTATIVAS} falhou (${erro.message}). Tentando de novo em ${ESPERA_ENTRE_TENTATIVAS_MS}ms...`
-      );
-      await aguardar(ESPERA_ENTRE_TENTATIVAS_MS);
-    }
-  }
-
-  // Inatingível: buscarPagina sempre retorna ou lança na última tentativa.
-  throw new Error('[googlePlaces] Falha inesperada após esgotar as tentativas.');
+  return await resposta.json();
 }
 
 function mapearLead(place) {
@@ -91,7 +96,19 @@ function mapearLead(place) {
  * Exige GOOGLE_PLACES_API_KEY configurada (com billing habilitado no Google
  * Cloud — a cota gratuita mensal não dispensa cartão cadastrado). Cobertura
  * de telefone é bem mais completa que o OSM, mas cada chamada é faturável
- * após a cota gratuita (ver PRD seção 7).
+ * após a cota gratuita (ver PRD seção 7 — SKU "Enterprise", ver comentário
+ * de FIELD_MASK acima).
+ *
+ * Desambiguação de cidade homônima (ex: "Santa Isabel" também existe na
+ * Espanha — ver PRD seção 6): aplicada via `locationRestriction`
+ * (retângulo/bounding box, ver locationRestrictionPara) só pras cidades em
+ * CIDADES (../lib/cidades.js); cidade fora desse mapa cai no texto livre,
+ * sujeita ao mesmo risco que o Overpass tem pra cidade não mapeada.
+ *
+ * Nota: esta fonte e a do Overpass não deduplicam entre si — o mesmo
+ * estabelecimento coletado pelas duas (IDs `gplaces/...` vs `node/`/`way/`)
+ * vira dois leads distintos na fila se `LEAD_SOURCE` for trocado entre
+ * execuções pro mesmo segmento+cidade (ver PRD seção 6).
  */
 export async function buscarLeads(segmento, cidade) {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
@@ -103,16 +120,23 @@ export async function buscarLeads(segmento, cidade) {
   }
 
   const query = `${segmento} em ${cidade}`;
+  const locationRestriction = locationRestrictionPara(cidade);
   const leads = [];
   let pageToken;
   let pagina = 0;
 
   do {
-    const dados = await buscarPagina(query, apiKey, pageToken);
-    const places = dados.places || [];
-    leads.push(...places.filter((place) => place.displayName?.text).map(mapearLead));
+    const dados = await buscarPagina(query, apiKey, pageToken, locationRestriction);
+    const places = dados?.places || [];
+    leads.push(
+      ...places
+        // sem `id` não há como montar uma chave estável no banco (ver
+        // mapearLead); sem `displayName` não é um lead acionável.
+        .filter((place) => place.id && place.displayName?.text)
+        .map(mapearLead)
+    );
 
-    pageToken = dados.nextPageToken;
+    pageToken = dados?.nextPageToken;
     pagina += 1;
   } while (pageToken && pagina < MAX_PAGINAS);
 
