@@ -98,7 +98,7 @@ function montarEndereco(tags = {}) {
 export async function buscarLeads(segmento, cidade) {
   const query = montarQuery(segmento, cidade);
 
-  const resposta = await fetchComRetry(
+  const dados = await fetchComRetry(
     OVERPASS_URL,
     {
       method: 'POST',
@@ -110,16 +110,18 @@ export async function buscarLeads(segmento, cidade) {
         'User-Agent': 'prospector-agent/0.1',
       },
       body: query,
+    },
+    {
+      apiLabel: 'Overpass API',
+      logTag: '[overpass]',
       // [timeout:${TIMEOUT_QUERY_S}] na query só limita a execução no
       // servidor — não fecha a conexão se o servidor aceitar e nunca
       // responder. Sem isso, uma tentativa pode travar indefinidamente
       // numa execução agendada.
-      signal: AbortSignal.timeout(TIMEOUT_FETCH_MS),
-    },
-    { apiLabel: 'Overpass API', logTag: '[overpass]' }
+      timeoutMs: TIMEOUT_FETCH_MS,
+    }
   );
 
-  const dados = await resposta.json();
   const elementos = dados?.elements || [];
 
   return elementos

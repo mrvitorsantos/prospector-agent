@@ -34,9 +34,16 @@ function locationRestrictionPara(cidade) {
   const centro = CIDADES[chaveComparacao(cidade)];
   if (!centro) return undefined;
 
-  const deltaLat = centro.raioMetros / METROS_POR_GRAU_LATITUDE;
+  // `raioMetros` é a distância do centro até o CANTO mais distante do
+  // bounding box (ver cidades.js), ou seja, a meia-diagonal do retângulo —
+  // não a meia-largura/meia-altura. Usá-lo direto como deltaLat/deltaLon
+  // infla o retângulo em ~1.41x (sqrt(2)), estourando o boundary real da
+  // cidade (achado de code review). Dividir por sqrt(2) faz a meia-diagonal
+  // resultante bater com raioMetros de novo.
+  const meioLadoMetros = centro.raioMetros / Math.SQRT2;
+  const deltaLat = meioLadoMetros / METROS_POR_GRAU_LATITUDE;
   const deltaLon =
-    centro.raioMetros / (METROS_POR_GRAU_LATITUDE * Math.cos((centro.lat * Math.PI) / 180));
+    meioLadoMetros / (METROS_POR_GRAU_LATITUDE * Math.cos((centro.lat * Math.PI) / 180));
 
   // `locationRestriction` (diferente de `locationBias`, que é só preferência
   // de ranking) exclui de fato resultado fora do retângulo — é o que
@@ -52,7 +59,7 @@ function locationRestrictionPara(cidade) {
 }
 
 async function buscarPagina(query, apiKey, pageToken, locationRestriction) {
-  const resposta = await fetchComRetry(
+  return await fetchComRetry(
     PLACES_URL,
     {
       method: 'POST',
@@ -65,12 +72,9 @@ async function buscarPagina(query, apiKey, pageToken, locationRestriction) {
       // Brasil); locationRestriction é a desambiguação forte pras cidades
       // mapeadas em CIDADES.
       body: JSON.stringify({ textQuery: query, pageToken, regionCode: 'BR', locationRestriction }),
-      signal: AbortSignal.timeout(TIMEOUT_FETCH_MS),
     },
-    { apiLabel: 'Google Places API', logTag: '[googlePlaces]' }
+    { apiLabel: 'Google Places API', logTag: '[googlePlaces]', timeoutMs: TIMEOUT_FETCH_MS }
   );
-
-  return await resposta.json();
 }
 
 function mapearLead(place) {
