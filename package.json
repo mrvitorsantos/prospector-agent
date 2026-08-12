@@ -11,9 +11,11 @@
     "collect": "node --env-file=.env src/collect.js",
     "qualify": "node --env-file=.env src/qualify.js",
     "build-queue": "node --env-file=.env src/buildQueue.js",
+    "sync-supabase": "node --env-file=.env src/syncSupabase.js",
     "start": "node --env-file=.env src/index.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
     "better-sqlite3": "^11.3.0"
   }
 }

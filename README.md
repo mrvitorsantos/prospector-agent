@@ -1,14 +1,19 @@
 # Prospector Agent
 
-Agente de prospecção de PMEs (pequenas e médias empresas) por segmento e
-cidade. Dado um segmento (ex: `barbearia`, `clínica odontológica`) e uma
+Agente de prospecção de PMEs (pequenas e médias empresas) **sem site** por
+segmento e cidade — o público-alvo é quem ainda não tem presença digital,
+pra oferecer criação de site institucional ou sistema de agendamento
+online. Dado um segmento (ex: `barbearia`, `clínica odontológica`) e uma
 cidade (ex: `Arujá`, `Guarulhos`), o agente:
 
 1. **Coleta** estabelecimentos desse segmento na cidade via [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)
-   (consulta sobre dados do OpenStreetMap — grátis, sem chave de API).
+   (consulta sobre dados do OpenStreetMap — grátis, sem chave de API) e
+   **descarta na hora quem já tem site cadastrado na fonte** — só quem não
+   tem site chega a ser gravado no banco.
 2. **Qualifica** cada lead com a [Gemini API](https://ai.google.dev/gemini-api/docs)
-   (nota 0–100 + mensagem de abordagem pronta), com heurística de fallback
-   se a API não estiver configurada ou falhar.
+   (nota 0–100 + mensagem de abordagem pronta, já mencionando a falta de
+   site), com heurística de fallback se a API não estiver configurada ou
+   falhar.
 3. **Monta uma fila** ordenada por score decrescente, exportada em
    `data/fila_<segmento>_<cidade>.csv` e `.json`, com link `wa.me` pronto
    para abordagem manual via WhatsApp.
@@ -36,10 +41,14 @@ segmento + cidade
       │
       ▼
 [3. src/buildQueue.js] ──► data/fila_<segmento>_<cidade>.csv e .json
+      │
+      ▼ (opcional, se Supabase configurado — ver "Sincronização com Supabase")
+[4. src/syncSupabase.js] ──► tabela `leads` no Supabase (Postgres)
 ```
 
 Cada etapa roda isolada (`npm run collect`, `npm run qualify`,
-`npm run build-queue`) ou em sequência via `npm start` (`src/index.js`).
+`npm run build-queue`, `npm run sync-supabase`) ou em sequência via
+`npm start` (`src/index.js`).
 
 ## Estrutura de pastas
 
@@ -49,13 +58,16 @@ src/
   collect.js          # etapa 1 — coleta (CLI)
   qualify.js           # etapa 2 — qualificação com Gemini (CLI)
   buildQueue.js        # etapa 3 — monta fila CSV/JSON (CLI)
-  index.js             # orquestra as 3 etapas em sequência (CLI)
+  syncSupabase.js      # etapa 4 (opcional) — espelha leads qualificados no Supabase (CLI)
+  index.js             # orquestra as etapas em sequência (CLI)
   sources/
     overpass.js        # cliente Overpass API — buscarLeads(segmento, cidade)
     googlePlaces.js      # cliente Google Places API (New) — mesma interface
     segments.js         # dicionário segmento -> tag(s) OSM (só usado pelo Overpass)
   lib/
     gemini.js           # cliente Gemini API + heurística de fallback
+    supabase.js          # cliente Supabase (singleton, service_role key)
+    categorias.js         # segmento -> categoria (só usado na sincronização com Supabase)
     phone.js             # normalização de telefone -> link wa.me
     csv.js               # serialização CSV simples (sem dependência externa)
     cli.js               # helper pra detectar execução direta via CLI
@@ -100,6 +112,97 @@ Interface de `buscarLeads(segmento, cidade)` é a mesma nas duas fontes — troc
 
 `src/sources/segments.js` (dicionário segmento → tag OSM) só é usado pelo Overpass — o Google Places busca por texto livre (`"<segmento> em <cidade>"`), sem precisar de mapeamento.
 
+## Filtro: só quem não tem site
+
+`src/collect.js` descarta, antes mesmo de gravar no banco, qualquer
+estabelecimento que já tenha um site cadastrado na fonte (tag `website`/
+`contact:website` no Overpass, campo `websiteUri` no Google Places) — o
+log de cada execução mostra quantos foram descartados por esse motivo.
+Isso é intencional: o produto é abordar quem ainda não tem presença
+digital pra oferecer criação de site ou sistema de agendamento online, não
+prospecção de PMEs em geral.
+
+Efeitos práticos:
+
+- O campo `site` na tabela `leads` fica sempre vazio pros leads gravados
+  — ele continua existindo no schema só por herança da interface comum às
+  duas fontes.
+- Rodar `collect.js` de novo pra um segmento+cidade já coletado não revive
+  um lead que passou a ter site depois (ele só deixa de aparecer nos
+  resultados novos da fonte — o registro antigo no banco não é
+  re-verificado nem removido automaticamente).
+- Perfis em redes sociais (Instagram, Facebook) **não contam como site**
+  pra esse filtro — só o campo de site/website "oficial" da fonte.
+
+## Sincronização com Supabase
+
+Passo opcional (etapa 4): espelha os leads já qualificados (status
+`qualificado`) de um segmento+cidade do SQLite local pra uma tabela `leads`
+no Supabase (Postgres gerenciado), via upsert por `id` — repetir é seguro.
+O SQLite continua sendo a fonte de verdade local; o Supabase existe pra
+consulta remota (fora da sua máquina) e como base pro futuro **agente de
+proposta** (ver `docs/PRD.md`).
+
+**Por quê Supabase em vez de outro serviço:** dado de lead (nome, telefone,
+score, cidade) é estruturado — se resolve com SQL normal, não com busca
+vetorial/RAG. RAG só faz sentido pra uma segunda tabela, `conhecimento`,
+com a extensão `pgvector` (portfólio, templates de proposta, relatórios de
+concorrência) que o agente de proposta vai consultar por similaridade
+semântica ao montar uma abordagem — mesmo Postgres cobre os dois casos, sem
+manter um serviço de vetor separado.
+
+Setup:
+
+1. Preencha `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` no `.env` (ver
+   comentários em `.env.example` — a service_role key fica em
+   *Project Settings > API > service_role secret* no painel do Supabase;
+   **nunca** a mesma coisa que a anon/publishable key, e nunca deve ser
+   exposta num client de navegador).
+2. Rode `npm run sync-supabase -- "<segmento>" "<cidade>"` isoladamente, ou
+   deixe o `npm start` sincronizar automaticamente ao final do pipeline
+   (index.js pula essa etapa sem quebrar se as variáveis não estiverem
+   configuradas).
+
+Schema da tabela `leads` no Supabase espelha o SQLite (ver "Modelo de
+dados" abaixo) — `src/syncSupabase.js` só envia as colunas de dado
+(`id`, `segmento`, `cidade`, `nome`, `endereco`, `telefone`, `site`,
+`wa_link`, `score`, `mensagem`, `status`); `criado_em`/`atualizado_em`
+ficam por conta do Postgres. Duas colunas existem só no Supabase, não no
+SQLite local:
+
+- **`categoria`** — agrupamento do segmento em algo mais amplo (ex:
+  `pizzaria` → `Alimentação`, `barbearia` → `Beleza & Estética`,
+  `dentista` → `Saúde`), calculado em `src/lib/categorias.js`
+  (`SEGMENTO_CATEGORIA`) na hora da sincronização — segmento sem categoria
+  mapeada cai em `"Outros"` em vez de quebrar. Segmento novo em
+  `src/sources/segments.js`? Adicione a categoria dele também em
+  `categorias.js`.
+- **Views por cidade** (`leads_aruja`, `leads_guarulhos`,
+  `leads_mogi_das_cruzes`, `leads_santa_isabel`, `leads_sao_paulo`) — a
+  tabela `leads` continua sendo uma só (fonte única, sem duplicar
+  schema/índice/trigger por cidade, e sem precisar de `UNION` pra
+  consultas que cruzam cidades), mas cada view filtra `WHERE cidade = '...'`
+  pra navegação rápida no SQL Editor/Table Editor do Supabase, como se
+  fossem tabelas separadas. Cidade nova fora dessa lista (fora do escopo
+  de `CIDADES`, `src/lib/cidades.js`) ainda vai normal pra `leads` — só não
+  ganha view própria até alguém criar uma:
+  ```sql
+  create or replace view public.leads_<slug_da_cidade> as
+    select * from public.leads where cidade = '<cidade normalizada, com acento>';
+  ```
+
+A tabela `conhecimento` (com coluna `embedding vector`, extensão
+`pgvector`) já existe no mesmo projeto Supabase, pronta pra quando o
+agente de proposta for implementado — hoje está vazia, não é populada por
+nenhum script deste pipeline.
+
+**Segurança:** RLS está habilitada nas duas tabelas, sem nenhuma policy
+ainda — na prática, a chave anon/publishable não tem acesso nenhum hoje
+(só a service_role key, que ignora RLS, usada por `syncSupabase.js`). Isso
+é intencional: antes de expor `leads` ou `conhecimento` a qualquer client
+com a chave anon/publishable (ex: um front-end do futuro agente de
+proposta), escreva as policies correspondentes primeiro.
+
 ## Como rodar
 
 Pipeline completo (recomendado):
@@ -114,6 +217,7 @@ Ou etapa por etapa (útil pra debugar cada passo):
 npm run collect -- "barbearia" "Arujá"
 npm run qualify -- "barbearia" "Arujá"
 npm run build-queue -- "barbearia" "Arujá"
+npm run sync-supabase -- "barbearia" "Arujá"   # opcional, ver "Sincronização com Supabase"
 ```
 
 Ao final, os arquivos `data/fila_barbearia_aruja.csv` e `.json` terão a
@@ -210,7 +314,7 @@ Get-ScheduledTask | Where-Object { $_.TaskName -like "ProspectorAgent-*" }
 |---|---|
 | `id` | ID único vindo do OSM (`node/123` ou `way/456`) |
 | `segmento`, `cidade` | Chave de busca normalizada (minúsculo) |
-| `nome`, `endereco`, `telefone`, `site` | Dados brutos coletados |
+| `nome`, `endereco`, `telefone`, `site` | Dados brutos coletados — `site` é sempre vazio/nulo por construção: `collect.js` descarta quem já tem site (ver "Filtro: só quem não tem site") |
 | `wa_link` | Link `wa.me` gerado a partir do telefone |
 | `score` | Nota 0–100 dada pelo Gemini (ou heurística de fallback) |
 | `mensagem` | Mensagem de abordagem gerada pra esse lead |
@@ -245,6 +349,10 @@ Get-ScheduledTask | Where-Object { $_.TaskName -like "ProspectorAgent-*" }
 
 ## Roadmap (quando fizer sentido financeiro)
 
-Ver seção 7 do PRD original (`../prds/PRD-prospector-agent.md`):
-troca do Overpass pela Google Places API, migração SQLite → Supabase,
-WhatsApp Business API oficial, orquestração via LangGraph.
+Ver seção 7 do PRD original (`../prds/PRD-prospector-agent.md`): WhatsApp
+Business API oficial, orquestração via LangGraph. Troca do Overpass pela
+Google Places API já implementada (`LEAD_SOURCE`, ver "Fonte de dados");
+sincronização com Supabase já implementada como espelho opcional (ver
+"Sincronização com Supabase") — SQLite continua sendo a fonte de verdade
+local, uma migração completa (aposentar o SQLite) fica pra quando o agente
+de proposta precisar rodar fora da máquina local.

@@ -11,27 +11,27 @@ function descreverLead(lead) {
   Segmento: ${lead.segmento}
   Cidade: ${lead.cidade}
   Endereço: ${lead.endereco || 'não informado'}
-  Telefone: ${lead.telefone || 'não informado'}
-  Site: ${lead.site || 'não informado'}`;
+  Telefone: ${lead.telefone || 'não informado'}`;
 }
 
 function montarPromptLote(leads) {
   return `Você é um especialista em prospecção B2B para pequenas e médias empresas (PMEs) no Brasil.
 
-Analise CADA lead abaixo e responda SOMENTE com um JSON array válido (sem markdown, sem texto antes ou depois), com exatamente um objeto por lead, na mesma ordem em que os leads foram listados, no formato exato:
+Todos os leads abaixo já foram filtrados por NÃO terem site cadastrado — são o público-alvo de uma oferta de criação de site institucional ou sistema de agendamento online. Analise CADA lead e responda SOMENTE com um JSON array válido (sem markdown, sem texto antes ou depois), com exatamente um objeto por lead, na mesma ordem em que os leads foram listados, no formato exato:
 [{"id": "<id do lead>", "score": <número inteiro de 0 a 100>, "mensagem": "<mensagem de abordagem em português>"}, ...]
 
 Critérios de nota (score):
 - Ter telefone cadastrado facilita a abordagem: aumenta a nota.
-- Ter site indica um negócio mais estruturado: aumenta um pouco a nota.
-- Nome e endereço completos e coerentes: aumenta a nota.
+- Nome e endereço completos e coerentes (negócio parece ativo e estabelecido): aumenta a nota.
+- Segmento com fluxo de agendamento natural (ex: barbearia, clínica, salão, academia) se beneficia mais de um sistema de agendamento online: aumenta um pouco a nota.
 - Falta de dados básicos (sem telefone, sem endereço): reduz a nota.
 
 Cada mensagem de abordagem deve:
 - Ser curta (até 3 frases), natural e em português do Brasil.
 - Se apresentar brevemente e citar o nome do estabelecimento.
+- Mencionar, de forma leve e não intrusiva, que percebeu que o estabelecimento não tem site — sem soar como crítica.
 - Ser adequada para envio manual via WhatsApp (não pode parecer spam em massa).
-- Apenas abrir uma conversa — não prometer nada que não foi pedido.
+- Apenas abrir uma conversa (perguntar como funciona o atendimento/agendamento hoje) — não empurrar venda de site/agendamento nem prometer nada que não foi pedido.
 
 Leads:
 ${leads.map(descreverLead).join('\n')}`;
@@ -51,17 +51,20 @@ function extrairJsonDaResposta(texto) {
  * não está configurada (sem GEMINI_API_KEY), ou quando o lead não tem
  * telefone (sem wa_link, não é acionável via WhatsApp de qualquer forma —
  * não vale a pena gastar quota da Gemini nele).
+ *
+ * Todo lead que chega aqui já foi filtrado em collect.js por não ter site
+ * (é o público-alvo da oferta de site/agendamento online) — por isso o
+ * campo `site` não entra mais nos critérios de nota.
  */
 export function qualificarComHeuristica(lead) {
   let score = 40;
   if (lead.telefone) score += 30;
-  if (lead.site) score += 15;
-  if (lead.endereco) score += 10;
+  if (lead.endereco) score += 15;
   score = Math.min(score, 95);
 
   const mensagem =
-    `Olá! Vi o ${lead.nome} aqui em ${lead.cidade} e queria entender rapidinho ` +
-    'como está a rotina de atendimento e agendamento de vocês hoje. Tem 2 minutos pra trocar uma ideia?';
+    `Olá! Vi o ${lead.nome} aqui em ${lead.cidade} e não encontrei um site ou agendamento ` +
+    'online de vocês. Queria entender rapidinho como funciona o atendimento aí hoje. Tem 2 minutos pra trocar uma ideia?';
 
   return { score, mensagem, origem: 'heuristica' };
 }

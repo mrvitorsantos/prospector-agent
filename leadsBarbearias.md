@@ -1,18 +1,26 @@
 # Roteiro de Abordagem e Vendas — Leads de Barbearias
 
 Roteiro para uso manual ao abordar os leads gerados pelo Prospector Agent
-(`data/fila_barbearia_*.json`), clicando no `wa_link` de cada lead. Cobre três
-ofertas possíveis — **site**, **agendamento online** e **bot de WhatsApp** — já
-que a barbearia certa para cada uma varia (ver "Como escolher a oferta"
-abaixo).
+(`data/fila_barbearia_*.json`, ou a view `leads_<cidade>` no Supabase — ver
+README, seção "Sincronização com Supabase"), clicando no `wa_link` de cada
+lead. Cobre três ofertas possíveis — **site**, **agendamento online** e
+**bot de WhatsApp** — já que a barbearia certa para cada uma varia (ver
+"Como escolher a oferta" abaixo).
+
+> O Prospector Agent hoje só coleta estabelecimentos **sem site cadastrado**
+> na fonte (Overpass/Google Places) — quem já tem site nem entra no banco
+> (ver README, seção "Filtro: só quem não tem site"). Ou seja, **todo lead
+> que chega até aqui já é candidato à oferta de Site** por padrão; as outras
+> duas ofertas (Agendamento, Bot) dependem do que a barbearia responde na
+> abertura, não de um dado que já vem coletado.
 
 ## Como escolher a oferta por lead
 
-| Sinal no lead | Oferta mais provável |
+| Sinal | Oferta mais provável |
 |---|---|
-| Sem `site` cadastrado no OSM | Site/página online |
-| Tem site mas parece estático/desatualizado | Agendamento online |
-| Telefone cadastrado, provável alto volume de mensagens (bairro central, nome comercial forte) | Bot de WhatsApp |
+| Ponto de entrada padrão (todo lead já é sem site, por construção do pipeline) | **Site/página online** — abrir com a mensagem da seção 2 |
+| Na resposta, menciona que já usa Instagram/rede social mas marca horário "no manual" (WhatsApp, telefone) | Agendamento online |
+| Na resposta, sinaliza volume alto de mensagens repetitivas ("respondo o dia inteiro", bairro central, nome comercial forte) | Bot de WhatsApp |
 | Score baixo / poucos dados (ex: só nome, sem endereço/telefone) | Abertura genérica — descobrir a dor antes de oferecer algo específico |
 
 Na dúvida, use a **Abertura genérica** (abaixo) e deixe a barbearia indicar a
@@ -42,7 +50,8 @@ só abrir conversa e diagnosticar a dor.
 ver fotos/preços/endereço antes de decidir, perde cliente pra concorrente que
 "parece mais profissional" online.
 
-**Mensagem de abertura (lead sem site):**
+**Mensagem de abertura (ponto de entrada padrão — todo lead já chega sem
+site, ver nota no topo do arquivo):**
 > Oi! Vi a [Nome] aqui em [Cidade] e reparei que vocês ainda não têm uma
 > página própria no Google. Hoje boa parte de quem procura barbearia decide
 > só olhando fotos e avaliações antes de ir — uma página simples resolve
