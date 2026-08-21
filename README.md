@@ -224,44 +224,32 @@ Ao final, os arquivos `data/fila_barbearia_aruja.csv` e `.json` terão a
 lista de leads ordenada por score, cada um com um link `wa.me` pronto pra
 clicar e abordar manualmente.
 
-## Automação (dia sim, dia não)
+## Execução manual (sem automação)
 
-O pipeline roda sozinho via **Task Scheduler do Windows**, sem precisar de
-servidor externo — `collect.js` só grava leads novos (não reseta o status de
-leads já qualificados), então repetir a execução é seguro e só consome quota
-das APIs pra leads realmente novos.
+O pipeline **não roda mais sozinho** — as 4 tarefas do Windows Task
+Scheduler que rodavam em dias alternados (`ProspectorAgent-06h-SantaIsabel`,
+`-12h-Aruja`, `-18h-Guarulhos`, `-00h-Mogi`) foram removidas de propósito;
+a coleta agora é disparada manualmente, cidade e segmento por vez, quando
+fizer sentido (ex: antes de uma sessão de abordagem). `collect.js` só grava
+leads novos (não reseta o status de leads já qualificados), então repetir a
+execução pro mesmo segmento+cidade é seguro e só consome quota das APIs pra
+leads realmente novos.
 
-As 4 tarefas rodam em **dias alternados** (`DaysInterval=2` no trigger),
-não todo dia — isso reduz pela metade o consumo mensal de cota tanto da
-Gemini quanto da Google Places API (ver seção "Fonte de dados"), mantendo
-um fluxo constante de leads novos sem esgotar a cota gratuita de nenhuma
-das duas.
-
-Em vez de uma tarefa só cobrindo várias cidades de uma vez, são **4 tarefas
-separadas, uma cidade cada, espaçadas ao longo do dia** — isso espalha o
-consumo de quota em vez de concentrar tudo num único horário:
-
-| Tarefa | Horário | Cidade |
-|---|---|---|
-| `ProspectorAgent-06h-SantaIsabel` | 06:00 | Santa Isabel |
-| `ProspectorAgent-12h-Aruja` | 12:00 | Arujá |
-| `ProspectorAgent-18h-Guarulhos` | 18:00 | Guarulhos |
-| `ProspectorAgent-00h-Mogi` | 00:00 | Mogi das Cruzes |
-
-São Paulo (capital) está **fora do escopo da automação** de propósito —
-é uma cidade grande demais pra uma amostra de 20 resultados por chamada
-(ver `MAX_PAGINAS` em `src/sources/googlePlaces.js`) representar bem a
-cobertura real, e giraria a cota bem mais rápido que as cidades menores
-acima.
+São Paulo (capital) é o único caso que merece cautela: é uma cidade grande
+demais pra uma amostra de 20 resultados por chamada (ver `MAX_PAGINAS` em
+`src/sources/googlePlaces.js`) representar bem a cobertura real, e gira a
+cota bem mais rápido que as cidades menores.
 
 - **Script:** `scripts/run-one.ps1 -Segmento "barbearia" -Cidade "<cidade>"`
-  — roda `npm start` pra uma cidade, com retry simples (2 tentativas) em
-  falha. Log de cada execução vai em `logs/run_<cidade>_<timestamp>.log`
-  (ignorado no git).
-- As 4 cidades acima têm proteção contra ambiguidade de cidade homônima em
-  outros países (ver PRD seção 6, o caso real que motivou isso: "Santa
-  Isabel" também existe na Espanha), definida uma vez em `CIDADES`
-  (`src/lib/cidades.js`) e usada pelas duas fontes:
+  — continua disponível pra rodar `npm start` com retry simples (2
+  tentativas) em falha. Log de cada execução vai em
+  `logs/run_<cidade>_<timestamp>.log` (ignorado no git). Útil mesmo sem
+  agendamento, só pra não perder uma execução por causa de uma falha
+  transitória de rede.
+- As 4 cidades de `CIDADES` (`src/lib/cidades.js` — Arujá, Guarulhos, Mogi
+  das Cruzes, Santa Isabel) têm proteção contra ambiguidade de cidade
+  homônima em outros países (ver PRD seção 6, o caso real que motivou isso:
+  "Santa Isabel" também existe na Espanha), usada pelas duas fontes:
   - `LEAD_SOURCE=overpass` busca a área pelo **ID de relação do OSM** (não
     por nome).
   - `LEAD_SOURCE=google_places` restringe a busca com **`locationRestriction`**
@@ -278,35 +266,6 @@ acima.
   entre execuções pro mesmo segmento+cidade pode gravar o mesmo
   estabelecimento duas vezes na fila (um lead `node/`/`way/` do Overpass e
   outro `gplaces/...` do Google Places).
-
-Comandos úteis (PowerShell) — troque `<nome-da-tarefa>` por uma da tabela:
-
-```powershell
-# ver detalhes/status de uma tarefa
-Get-ScheduledTask -TaskName "<nome-da-tarefa>" | Format-List
-
-# rodar manualmente agora, pra testar
-Start-ScheduledTask -TaskName "<nome-da-tarefa>"
-
-# desabilitar temporariamente (sem apagar)
-Disable-ScheduledTask -TaskName "<nome-da-tarefa>"
-Enable-ScheduledTask -TaskName "<nome-da-tarefa>"
-
-# remover de vez
-Unregister-ScheduledTask -TaskName "<nome-da-tarefa>" -Confirm:$false
-
-# listar as 4 tarefas do Prospector de uma vez
-Get-ScheduledTask | Where-Object { $_.TaskName -like "ProspectorAgent-*" }
-```
-
-**Limitações das tarefas agendadas (padrão do Windows):**
-
-- Modo "interativo apenas" — só executam se o usuário estiver logado no
-  Windows no horário (tela pode estar bloqueada, mas a sessão precisa
-  existir). A tarefa das 00:00 é a mais sensível a isso.
-- Por padrão, o Task Scheduler não inicia a tarefa se o notebook estiver na
-  bateria. Ajuste em `Set-ScheduledTask` ou pelas configurações de energia da
-  tarefa na GUI (`taskschd.msc`) se isso for um problema.
 
 ## Modelo de dados (tabela `leads`)
 

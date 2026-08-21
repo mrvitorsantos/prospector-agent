@@ -19,6 +19,8 @@ export const SEGMENTO_CATEGORIA = {
   dentista: 'Saúde',
   'clinica medica': 'Saúde',
   'clinica veterinaria': 'Saúde',
+  'clinica de estetica': 'Beleza & Estética',
+  'clinica estetica': 'Beleza & Estética',
   farmacia: 'Saúde',
   otica: 'Saúde',
   academia: 'Bem-estar & Fitness',

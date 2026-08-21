@@ -45,14 +45,23 @@ chamada por lote, em vez de uma chamada por lead — reduz o número de requests
 consumidos da quota gratuita, que é o limite que mais estoura em uso diário
 (ver seção 6).
 
-**Automação diária (pós-v0.1).** `scripts/run-one.ps1` + 4 tarefas no Windows
-Task Scheduler (`ProspectorAgent-06h-SantaIsabel`, `-12h-Aruja`,
-`-18h-Guarulhos`, `-00h-Mogi`) rodam o pipeline completo uma cidade por vez,
-espaçadas ao longo do dia (06h/12h/18h/00h) — em vez de uma tarefa única
-cobrindo várias cidades de uma vez, o que concentraria o consumo de quota da
-Gemini num único horário. `collect.js` só grava leads novos (não reseta
-status de leads já qualificados), então repetir a coleta diariamente é
-seguro e só consome quota da Gemini para leads realmente novos.
+**Automação diária (pós-v0.1, revertida depois — ver abaixo).**
+`scripts/run-one.ps1` + 4 tarefas no Windows Task Scheduler
+(`ProspectorAgent-06h-SantaIsabel`, `-12h-Aruja`, `-18h-Guarulhos`,
+`-00h-Mogi`) rodavam o pipeline completo uma cidade por vez, espaçadas ao
+longo do dia (06h/12h/18h/00h) — em vez de uma tarefa única cobrindo várias
+cidades de uma vez, o que concentraria o consumo de quota da Gemini num
+único horário. `collect.js` só grava leads novos (não reseta status de
+leads já qualificados), então repetir a coleta é segura e só consome quota
+da Gemini para leads realmente novos — isso continua valendo mesmo sem
+agendamento.
+
+**Volta pra execução manual (pós-v0.1).** As 4 tarefas foram removidas — a
+coleta passou a ser disparada manualmente, cidade e segmento por vez,
+quando fizer sentido (ver README, seção "Execução manual (sem
+automação)"). `scripts/run-one.ps1` continua existindo e sendo útil rodado
+à mão (retry simples + log em arquivo), só não é mais chamado por
+agendamento.
 
 **Desambiguação de cidade por ID (pós-v0.1).** `overpass.js` busca a área
 das 4 cidades acima pelo ID de relação do OSM (`RELATION_ID_POR_CIDADE`,
@@ -99,10 +108,11 @@ nome, sujeito à mesma ambiguidade.
 - **Política de uso justo da Overpass API.** A instância pública usada por
   `overpass.js` (`overpass-api.de`) desaconselha uso pesado ou agendado sem
   contrapartida — tráfego automatizado recorrente é candidato a
-  throttling/bloqueio por IP. Com a automação diária (seção 2), esse risco
-  passa de teórico pra real: se o cron começar a falhar de forma consistente,
-  a causa mais provável é essa, e a mitigação é rodar uma instância própria do
-  Overpass ou reduzir a frequência/quantidade de cidades no cron.
+  throttling/bloqueio por IP. Era um risco mais concreto durante a janela em
+  que a automação diária (seção 2) rodava sozinha; com a coleta manual atual
+  volta a ser teórico, mas vale lembrar se a automação for reativada no
+  futuro — mitigação seria rodar uma instância própria do Overpass ou reduzir
+  a frequência/quantidade de cidades.
 
 ## 6. Limitações conhecidas
 
@@ -116,9 +126,10 @@ nome, sujeito à mesma ambiguidade.
   seção 5, agravado pela automação diária.
 - Nome do modelo Gemini no `.env.example` pode estar desatualizado — confirme
   o nome vigente em https://ai.google.dev/gemini-api/docs/models antes de rodar.
-- As tarefas agendadas só rodam com o usuário logado no Windows e, por
-  padrão, não executam se o PC estiver na bateria — ver README, seção
-  "Automação diária".
+- ~~As tarefas agendadas só rodam com o usuário logado no Windows e, por
+  padrão, não executam se o PC estiver na bateria~~ — não se aplica mais: a
+  automação via Task Scheduler foi removida, coleta agora é manual (ver
+  README, seção "Execução manual (sem automação)").
 - **Ambiguidade de cidade homônima (caso real).** Buscar "Santa Isabel" sem
   restrição de país/estado casou com uma cidade na Espanha (endereços em
   espanhol, telefones `+34`), não com a Santa Isabel-SP pretendida — o

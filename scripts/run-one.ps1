@@ -1,11 +1,9 @@
-﻿# Roda o pipeline completo (collect -> qualify -> buildQueue) para UM
-# segmento/cidade, recebido por parâmetro. Pensado pra ser chamado pelo
-# Windows Task Scheduler várias vezes ao dia, uma cidade por vez — ver
-# README.md, seção "Automação diária".
-#
-# Rodar uma cidade pequena por vez (em vez de todas de uma tacada, como o
-# script antigo scripts/run-daily.ps1 fazia) espalha o consumo de quota da
-# Gemini API ao longo do dia em vez de concentrar tudo num único horário.
+﻿# Roda o pipeline completo (collect -> qualify -> buildQueue -> syncSupabase,
+# se configurado) para UM segmento/cidade, recebido por parâmetro — ver
+# README.md, seção "Execução manual (sem automação)". Não depende mais do
+# Windows Task Scheduler (removido de propósito, coleta agora é sob demanda),
+# mas continua útil rodado à mão: cobre falha transitória de rede com um
+# retry a mais e deixa log da execução em vez de só no console.
 
 param(
     [Parameter(Mandatory = $true)][string]$Segmento,
